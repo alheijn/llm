@@ -2,17 +2,25 @@
 
 import os
 import json
+from pathlib import Path
 from preprocess import preprocess_texts
 from embed import generate_embeddings
 from cluster import cluster_documents, calculate_silhouette_score, visualize_clusters
 from label import label_clusters
 
 # Ensure the spaCy model is downloaded
-os.system("python3 -m spacy download en_core_web_sm")
+if not Path("llm-env/lib/python3.12/site-packages/en_core_web_sm").exists():
+    os.system("python3 -m spacy download en_core_web_sm")
 
-# Ensure the model and dataset are downloaded
-os.system("python3 src/download_model.py")
-os.system("python3 src/download_dataset.py")
+# Ensure the model is downloaded
+model_path = Path("models/mistral-7b")
+if not model_path.exists() or not any(model_path.iterdir()):
+    os.system("python3 src/download_model.py")
+
+# Ensure the dataset is downloaded
+dataset_path = Path("data/sample_dataset.json")
+if not dataset_path.exists():
+    os.system("python3 src/download_dataset.py")
  
 # Load the dataset
 with open('../data/sample_dataset.json', 'r') as f:
