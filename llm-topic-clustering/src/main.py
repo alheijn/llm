@@ -4,7 +4,7 @@ import os
 import json
 from preprocess import preprocess_texts
 from embed import generate_embeddings
-from cluster import cluster_documents, calculate_silhouette_score
+from cluster import cluster_documents, calculate_silhouette_score, visualize_clusters
 from label import label_clusters
 
 # Ensure the model and dataset are downloaded
@@ -28,6 +28,9 @@ clusters = cluster_documents(embeddings)
 # Calculate and display the silhouette score
 silhouette_score = calculate_silhouette_score(embeddings, clusters)
 print(f"Silhouette Score: {silhouette_score}")
+
+# Visualize the clusters
+visualize_clusters(embeddings, clusters)
 
 # Label the clusters
 labels = label_clusters(clusters, preprocessed_texts)
