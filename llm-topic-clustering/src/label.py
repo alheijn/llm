@@ -3,6 +3,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 def label_clusters(clusters, texts):
     """
     Assigns labels to clusters based on the most significant terms in the texts.
+    In other words: extracts representative keywords for each cluster.
 
     Parameters:
     clusters (list of int): A list of cluster assignments for each text.
