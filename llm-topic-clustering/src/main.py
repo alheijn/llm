@@ -7,6 +7,9 @@ from embed import generate_embeddings
 from cluster import cluster_documents, calculate_silhouette_score, visualize_clusters
 from label import label_clusters
 
+# Ensure the spaCy model is downloaded
+os.system("python3 -m spacy download en_core_web_sm")
+
 # Ensure the model and dataset are downloaded
 os.system("python3 src/download_model.py")
 os.system("python3 src/download_dataset.py")
