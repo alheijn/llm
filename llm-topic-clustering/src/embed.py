@@ -1,28 +1,25 @@
-from transformers import AutoTokenizer, AutoModel
 import torch
+from transformers import AutoModel, AutoTokenizer
 
-class Embedder:
-    def __init__(self, model_name='mistral-7b'):
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name)
+# Load the model and tokenizer
+model_name = "mistralai/Mistral-7B-v0.3"
+model = AutoModel.from_pretrained(model_name)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    def generate_embeddings(self, documents, batch_size=32):
-        embeddings = []
-        for i in range(0, len(documents), batch_size):
-            batch = documents[i:i + batch_size]
-            inputs = self.tokenizer(batch, padding=True, truncation=True, return_tensors='pt')
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                batch_embeddings = outputs.last_hidden_state.mean(dim=1)  # Mean pooling
-                embeddings.append(batch_embeddings)
-        return torch.cat(embeddings, dim=0)  # Concatenate all embeddings
+def generate_embeddings(texts):
+    """
+    Generate embeddings for a list of texts using a pre-trained model.
 
-def main():
-    # Example usage
-    embedder = Embedder()
-    sample_documents = ["This is a sample document.", "Another document for testing."]
-    embeddings = embedder.generate_embeddings(sample_documents)
-    print(embeddings)
+    Args:
+        texts (list of str): A list of text strings to generate embeddings for.
 
-if __name__ == "__main__":
-    main()
+    Returns:
+        list of numpy.ndarray: A list of embeddings, where each embedding is a numpy array.
+    """
+    embeddings = []
+    for text in texts:
+        inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True, max_length=512)
+        with torch.no_grad():
+            outputs = model(**inputs)
+        embeddings.append(outputs.last_hidden_state.mean(dim=1).squeeze().cpu().numpy())
+    return embeddings
