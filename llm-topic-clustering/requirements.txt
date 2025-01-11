@@ -6,3 +6,4 @@ torch
 transformers
 huggingface_hub
 matplotlib
+sentencepiece
