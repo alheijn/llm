@@ -5,3 +5,4 @@ numpy
 torch
 transformers
 huggingface_hub
+matplotlib
