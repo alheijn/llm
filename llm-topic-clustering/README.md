@@ -1,3 +1,4 @@
+Note: AI-generated
 # LLM Topic Clustering Project
 
 This project implements a simple solution for identifying topics in a small dataset and clustering documents thematically using the Mistral-7B model. The focus is on optimizing the implementation for local resources, specifically on an M3 MacBook Air.
@@ -40,8 +41,10 @@ The dataset used for this project is located in `data/sample_dataset.csv`. It co
    cd llm-topic-clustering
    ```
 
-2. Install the required dependencies:
+2. Install the required dependencies in a virtual environment:
    ```
+   python3.12 -m venv llm-env
+   source llm-env/bin/activate
    pip install -r requirements.txt
    ```
 
