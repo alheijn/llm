@@ -42,6 +42,8 @@ The dataset used for this project is located in `data/sample_dataset.csv`. It co
    ```
 
 2. Install the required dependencies in a virtual environment:
+
+   Important: torch only works on python 3.12 or lower
    ```
    python3.12 -m venv llm-env
    source llm-env/bin/activate

@@ -4,4 +4,4 @@ pandas
 numpy
 torch
 transformers
-mistral_inference
+huggingface_hub
