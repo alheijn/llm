@@ -6,6 +6,15 @@ model_name = "mistralai/Mistral-7B-v0.3"
 model = AutoModel.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
+# Add a padding token if it doesn't exist
+if tokenizer.pad_token is None:
+    tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+    model.resize_token_embeddings(len(tokenizer))
+
+# Check if MPS (Metal Performance Shaders backend) is available and set the device accordingly
+device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+model.to(device)
+
 def generate_embeddings(texts):
     """
     Generate embeddings for a list of texts using a pre-trained model.
