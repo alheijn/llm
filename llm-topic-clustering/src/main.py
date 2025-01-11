@@ -23,7 +23,7 @@ if not dataset_path.exists():
     os.system("python3 src/download_dataset.py")
  
 # Load the dataset
-with open('../data/sample_dataset.json', 'r') as f:
+with open('data/sample_dataset.json', 'r') as f:
     dataset = json.load(f)
 documents = dataset['documents']
 
