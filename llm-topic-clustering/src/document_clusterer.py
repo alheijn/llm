@@ -94,27 +94,20 @@ class DocumentClusterer:
         
     def preprocess_text(self, text):
         """Basic text preprocessing"""
-        ### OLD CODE ###
-        # # Convert to lowercase and remove special characters
-        # text = text.lower()
-        # text = re.sub(r'[^\w\s]', '', text)
-        # tokens = text.split()
-        # tokens = [self.stemmer.stem(token) for token in tokens if token not in ENGLISH_STOP_WORDS]
-        # # Remove extra whitespace
-        # text = ' '.join(tokens)
-        # return text
-
         # convert to lowercase
         text = text.lower()
         # tokenize
         tokens = word_tokenize(text)
+
         # remove punctuations and numbers
-        tokens = [token for token in tokens if token not in string.punctuation and not token.isnumeric()]
+        # tokens = [token for token in tokens if token not in string.punctuation and not token.isnumeric()]
+        tokens = [token for token in tokens if token not in string.punctuation]
+
         # Remove stop words and short words
         tokens = [
             self.stemmer.stem(token) 
             for token in tokens 
-            if token not in ENGLISH_STOP_WORDS and len(token) > 2
+            if token not in ENGLISH_STOP_WORDS and len(token) > 1
         ]
         # rejoin tokens
         return ' '.join(tokens)
@@ -368,14 +361,16 @@ class DocumentClusterer:
                 indices = random.sample(range(len(dataset.data)), num_samples)
                 texts = [dataset.data[i] for i in indices]
                 categories = [dataset.target_names[dataset.target[i]] for i in indices]
-                print(f"\nSampled categories: {set(categories)}")                
+                print(f"\nSampled categories: {set(categories)}")    
+
+                # Save input texts
+                save_texts(texts, categories=categories if dataset_name == "20newsgroups" else None)            
             else:
                 texts = dataset.data
         else:
             raise ValueError(f"Dataset {dataset_name} not supported")
         
-        # Save input texts
-        save_texts(texts, categories=categories if dataset_name == "20newsgroups" else None)
+        
 
         # Track runtime and memory
         start_time = time.time()
@@ -397,7 +392,7 @@ class DocumentClusterer:
         
         # Calculate metrics
         end_time = time.time()
-        final_memory = psutil.Process().memory_info().vms / 1024 / 1024  # MB       old: rss
+        final_memory = psutil.Process().memory_info().rss / 1024 / 1024  # MB
         
         metrics = {
             "runtime_seconds": end_time - start_time,
@@ -405,7 +400,7 @@ class DocumentClusterer:
             "silhouette_score": self.silhouette_avg
         }
 
-        save_clustering_results(clusters, cluster_labels, metrics, texts)
+        save_clustering_results(self.num_clusters, clusters, cluster_labels, metrics, texts)
 
         self.visualize_clusters(embeddings, clusters, cluster_labels)
         

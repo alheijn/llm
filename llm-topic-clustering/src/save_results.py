@@ -3,10 +3,11 @@ import os
 from datetime import datetime
 import numpy as np
 
-def save_texts(self, texts, categories=None):
+def save_texts(texts, categories=None):
     """Save input texts and their categories"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = os.path.join(self.output_dir, 'texts', f'input_texts_{timestamp}.json')
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'output')
+    output_path = os.path.join(output_dir, 'texts', f'input_texts_{timestamp}.json')
         
     data = {
         'texts': texts,
@@ -17,10 +18,11 @@ def save_texts(self, texts, categories=None):
         json.dump(data, f, indent=2)
 
 
-def save_clustering_results(self, clusters, cluster_labels, metrics, texts):
+def save_clustering_results(num_clusters, clusters, cluster_labels, metrics, texts):
     """Save clustering results"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = os.path.join(self.output_dir, 'results', f'clustering_results_{timestamp}.json')
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'output')
+    output_path = os.path.join(output_dir, 'results', f'clustering_results_{timestamp}.json')
         
     # Convert numpy types to native Python types
     def convert_to_serializable(obj):
@@ -33,7 +35,7 @@ def save_clustering_results(self, clusters, cluster_labels, metrics, texts):
         return obj
 
     results = {
-        'num_clusters': self.num_clusters,
+        'num_clusters': num_clusters,
         'silhouette_score': float(metrics.get('silhouette_score', 0)),
         'runtime_seconds': float(metrics.get('runtime_seconds', 0)),
         'memory_usage_mb': float(metrics.get('memory_usage_mb', 0)),
