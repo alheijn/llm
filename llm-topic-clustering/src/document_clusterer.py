@@ -84,12 +84,6 @@ class DocumentClusterer:
             
         except Exception as e:
             print(f"\nError loading model: {str(e)}")
-            print("\nTroubleshooting steps:")
-            print("1. Ensure all dependencies are installed:")
-            print("   pip install -r requirements.txt")
-            print("2. Check if model files are correctly placed in models/mistral-7b/")
-            print("3. Ensure you have enough system memory")
-            print("4. Try reducing batch_size if you're running out of memory\n")
             raise
         
     def preprocess_text(self, text):
@@ -99,16 +93,21 @@ class DocumentClusterer:
         # tokenize
         tokens = word_tokenize(text)
 
-        # remove punctuations and numbers
-        # tokens = [token for token in tokens if token not in string.punctuation and not token.isnumeric()]
-        tokens = [token for token in tokens if token not in string.punctuation]
+        # Create mapping of stemmed to original words
+        stem_map = {}
+        processed_tokens = []        
 
-        # Remove stop words and short words
-        tokens = [
-            self.stemmer.stem(token) 
-            for token in tokens 
-            if token not in ENGLISH_STOP_WORDS and len(token) > 1
-        ]
+        for token in tokens:
+            if token not in string.punctuation:
+                stemmed = self.stemmer.stem(token)
+                if stemmed not in stem_map:
+                    stem_map[stemmed] = []
+                stem_map[stemmed].append(token)
+                if token not in ENGLISH_STOP_WORDS and len(token) > 2:
+                    processed_tokens.append(stemmed)
+        
+        # store mapping for later use
+        self.stem_map = stem_map
         # rejoin tokens
         return ' '.join(tokens)
         
@@ -161,17 +160,16 @@ class DocumentClusterer:
             max_features=2000,
             stop_words=list(ENGLISH_STOP_WORDS),
             ngram_range=(1, 3),     # Include both single words and bigrams
-            min_df=1,       # Term must appear in at least 2 documents
-            max_df=0.90     # Ignore terms that appear in more than 90% of documents
+            min_df=2,       # Term must appear in at least 2 documents
+            max_df=0.80     # Ignore terms that appear in more than ...% of documents
         )
 
         # # Preprocess texts again before TF-IDF
         # processed_texts = [self.preprocess_text(text) for text in texts]
         # tfidf_matrix = tfidf.fit_transform(processed_texts)
         tfidf_matrix = tfidf.fit_transform(texts)
-        
-        cluster_labels = {}
         feature_names = tfidf.get_feature_names_out()
+        cluster_labels = {}
 
         for i in range(self.num_clusters):
             # Get texts in this cluster
@@ -198,24 +196,14 @@ class DocumentClusterer:
             # Filter and group terms
             unigrams = []
             phrases = []
-            
-            # # Filter terms to ensure quality
-            # for idx in top_indices:
-            #     term = feature_names[idx]
-            #     # Add term if it's not too short and has a significant TF-IDF score
-            #     if (len(term) > 1 and  # Longer than 1 character
-            #         avg_tfidf[idx] > 0.05 and  # Significant TF-IDF score
-            #         not term.isnumeric()):  # Not just a number
-            #         top_terms.append(term)
-            #     if len(top_terms) >= 5:  # Keep top 5 meaningful terms
-            #         break
 
             for term, score in candidates:
             # Separate unigrams and phrases
+                original_term = self.get_original_term(term)
                 if ' ' in term and score > 0.1:  # Higher threshold for phrases
                     phrases.append(term)
                 elif score > 0.05:  # Lower threshold for single words
-                    unigrams.append(term)
+                    unigrams.append(original_term)
             
                 # Stop if we have enough terms
                 if len(phrases) >= 2 and len(unigrams) >= 3:
@@ -224,17 +212,9 @@ class DocumentClusterer:
             # Combine phrases and unigrams for final labels
             top_terms = phrases[:2] + unigrams[:3]
             
-            # if top_terms:  # Only add if we found meaningful terms
-            #     cluster_labels[i] = top_terms
-        
-            # # Ensure cluster has labels
-            # if not top_terms:
-            #     # If no terms pass filters, use top 5 terms without filtering
-            #     top_terms = [feature_names[idx] for idx in top_indices[:5]]
-        
             # Ensure we have at least some terms
             if not top_terms and candidates:
-                top_terms = [term for term, _ in candidates[:5]]
+                top_terms = [self.get_original_term(term) for term, _ in candidates[:5]]
         
             cluster_labels[i] = top_terms                   
             
