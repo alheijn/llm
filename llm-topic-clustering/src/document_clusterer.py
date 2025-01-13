@@ -20,6 +20,8 @@ from nltk.stem import PorterStemmer
 from nltk.tokenize import word_tokenize
 import string
 import nltk
+from datetime import datetime
+import json
 
 
 class DocumentClusterer:
@@ -27,6 +29,7 @@ class DocumentClusterer:
 
         os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
+        self.initial_memory = psutil.Process().memory_info().rss / 1024 / 1024  # MB
         self.model_id = model_id
         self.num_clusters = num_clusters
         self.batch_size = batch_size
@@ -45,6 +48,47 @@ class DocumentClusterer:
         except LookupError:
             nltk.download('punkt_tab')
 
+        # create output directories to store the results
+        self.output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'output')
+        for subdir in ['texts', 'plots', 'results']:
+            os.makedirs(os.path.join(self.output_dir, subdir), exist_ok=True)
+        
+
+    def save_texts(self, texts, categories=None):
+        """Save input texts and their categories"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(self.output_dir, 'texts', f'input_texts_{timestamp}.json')
+        
+        data = {
+            'texts': texts,
+            'categories': categories if categories else []
+        }
+        
+        with open(output_path, 'w') as f:
+            json.dump(data, f, indent=2)
+            
+    def save_clustering_results(self, clusters, cluster_labels, metrics, texts):
+        """Save clustering results"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(self.output_dir, 'results', f'clustering_results_{timestamp}.json')
+        
+        results = {
+            'num_clusters': self.num_clusters,
+            'silhouette_score': metrics.get('silhouette_score', None),
+            'runtime_seconds': metrics.get('runtime_seconds', None),
+            'memory_usage_mb': metrics.get('memory_usage_mb', None),
+            'cluster_labels': cluster_labels,
+            'cluster_assignments': {
+                i: {
+                    'cluster': int(clusters[i]),
+                    'text': texts[i][:200] + '...' if len(texts[i]) > 200 else texts[i]
+                }
+                for i in range(len(texts))
+            }
+        }
+        
+        with open(output_path, 'w') as f:
+            json.dump(results, f, indent=2)
 
         
     def setup_model(self):
@@ -151,6 +195,7 @@ class DocumentClusterer:
         
         # Calculate silhouette score
         silhouette_avg = silhouette_score(embeddings, clusters)
+        self.silhouette_avg = silhouette_avg
         print(f"Silhouette Score: {silhouette_avg:.3f}")
         
         return clusters, kmeans
@@ -249,6 +294,8 @@ class DocumentClusterer:
             clusters (array): Cluster assignments
             cluster_labels (dict): Dictionary of cluster labels
         """
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
         # Create a figure with subplots
         fig = plt.figure(figsize=(20, 10))
         
@@ -261,10 +308,12 @@ class DocumentClusterer:
         self._plot_cluster_sizes(clusters, cluster_labels, ax2)
         
         plt.tight_layout()
+        # save combined plot
+        plt.savefig(os.path.join(self.output_dir, 'plots', f'clusters_overview_{timestamp}.png'))
         plt.show()
         
         # 3. Term importance heatmap (separate figure)
-        self._plot_term_heatmap(clusters, cluster_labels)
+        self._plot_term_heatmap(clusters, cluster_labels, timestamp)
         
     def _plot_cluster_pca(self, embeddings, clusters, cluster_labels, ax):
         """Plot PCA projection of document embeddings"""
@@ -318,7 +367,7 @@ class DocumentClusterer:
         ax.set_title('Cluster Size Distribution')
         ax.set_xlabel('Number of Documents')
         
-    def _plot_term_heatmap(self, clusters, cluster_labels):
+    def _plot_term_heatmap(self, clusters, cluster_labels, timestamp):
         """Create heatmap of term importance across clusters"""
         # Create term importance matrix
         terms = set()
@@ -341,6 +390,7 @@ class DocumentClusterer:
         plt.title('Term Importance Across Clusters')
         plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'plots', f'term_heatmap_{timestamp}.png'))
         plt.show()
 
         
@@ -362,9 +412,11 @@ class DocumentClusterer:
         else:
             raise ValueError(f"Dataset {dataset_name} not supported")
         
+        # Save input texts
+        self.save_texts(texts, categories=categories if dataset_name == "20newsgroups" else None)
+
         # Track runtime and memory
         start_time = time.time()
-        initial_memory = psutil.Process().memory_info().rss / 1024 / 1024  # MB
 
         # Preprocess all texts
         texts = [self.preprocess_text(text) for text in texts]
@@ -387,10 +439,11 @@ class DocumentClusterer:
         
         metrics = {
             "runtime_seconds": end_time - start_time,
-            "memory_usage_mb": final_memory - initial_memory,
-            "num_documents": len(texts),
-            "num_clusters": self.num_clusters
+            "memory_usage_mb": final_memory - self.initial_memory,
+            "silhouette_score": self.silhouette_avg
         }
+
+        self.save_clustering_results(clusters, cluster_labels, metrics, texts)
 
         self.visualize_clusters(embeddings, clusters, cluster_labels)
         
