@@ -1,9 +1,21 @@
-scikit-learn
-spaCy
-pandas
-numpy
+# scikit-learn
+# spaCy
+# pandas
+# numpy
+# torch
+# transformers
+# huggingface_hub
+# matplotlib
+# sentencepiece
+# tqdm
+
 torch
 transformers
-huggingface_hub
+datasets
+scikit-learn
+numpy
+tqdm
 matplotlib
-sentencepiece
+seaborn
+accelerate
+psutil
