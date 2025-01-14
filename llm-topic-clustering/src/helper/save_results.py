@@ -7,7 +7,9 @@ def save_texts(texts, categories=None):
     """Save input texts and their categories"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'output')
-    output_path = os.path.join(output_dir, 'texts', f'input_texts_{timestamp}.json')
+    output_texts_dir = os.path.join(output_dir, 'texts')
+    os.makedirs(output_texts_dir, exist_ok=True)
+    output_path = os.path.join(output_texts_dir, f'input_texts_{timestamp}.json')
         
     data = {
         'texts': texts,

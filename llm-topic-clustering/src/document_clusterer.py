@@ -16,6 +16,7 @@ import string
 import nltk
 from helper.save_results import save_texts, save_clustering_results
 from helper.visualize_results import visualize_clusters
+import efficient_cluster_summarizer
 
 class DocumentClusterer:
     def __init__(self, model_id="mistralai/Mistral-7B-v0.3", num_clusters=5, batch_size=5):
@@ -167,8 +168,8 @@ class DocumentClusterer:
             max_features=2000,
             stop_words=list(ENGLISH_STOP_WORDS),
             ngram_range=(1, 3),     # Include both single words and bigrams
-            min_df=2,       # Term must appear in at least 2 documents
-            max_df=0.80     # Ignore terms that appear in more than ...% of documents
+            min_df=1,       # Term must appear in at least min_df documents
+            max_df=0.80     # Ignore terms that appear in more than max_df% of documents
         )
 
         # # Preprocess texts again before TF-IDF
@@ -231,7 +232,8 @@ class DocumentClusterer:
         """Main processing pipeline"""
         # Load and preprocess dataset
         if dataset_name == "20newsgroups":
-            dataset = fetch_20newsgroups(subset='train', remove=('headers', 'footers', 'quotes'), categories=None)
+            dataset = fetch_20newsgroups(subset='train', remove=('headers', 'footers', 'quotes'), 
+                                         categories=['sci.electronics', 'talk.politics.misc', 'talk.religion.misc', 'rec.sport.hockey'])
             # Sample if needed
             if num_samples and num_samples < len(dataset.data):
                 import random
@@ -261,11 +263,25 @@ class DocumentClusterer:
         # Perform clustering
         clusters, kmeans = self.cluster_documents(embeddings)
         
-        # Get cluster labels
+        # Get cluster labels using TF-IDF
         cluster_labels = self.get_cluster_labels(texts, clusters, kmeans)
-        print("Old Cluster Topics:")
+        print("TF-IDF Cluster Topics:")
         for cluster_id, terms in cluster_labels.items():
             print(f"Cluster {cluster_id}: {', '.join(terms)}")
+            
+        # generate and save summaries using efficient approach with TF-IDF labels
+        print("\nGenerating cluster summaries...")
+        cluster_summaries = self.generate_efficient_summaries(texts, clusters, cluster_labels)
+        self.save_efficient_summaries(cluster_summaries)
+        
+        # Print summaries
+        print("\nCluster Summaries:")
+        for cluster_id, summary in cluster_summaries.items():
+            print(f"\nCluster {cluster_id}:")
+            print(f"Topic: {summary['topic']}")
+            print(f"TF-IDF terms: {', '.join(summary['tfidf_terms'])}")
+            print(f"Key phrases: {', '.join(summary['key_phrases'])}")
+            print(f"Representative content: {summary['representative_sentence'][:200]}...")        
         
         # Calculate metrics
         end_time = time.time()
@@ -278,26 +294,16 @@ class DocumentClusterer:
         }
 
         save_clustering_results(self.num_clusters, clusters, cluster_labels, metrics, texts)
-        
-        # Generate and save detailed summaries
-        print("\nGenerating cluster summaries start")
-        cluster_summaries = self.generate_cluster_summaries(texts, clusters)
-        self.save_cluster_summaries(cluster_summaries)
-        
-        print("\nCluster Summaries:")
-        for cluster_id, summary in cluster_summaries.items():
-            print(f"\nCluster {cluster_id}:")
-            print(summary)
 
         visualize_clusters(embeddings, clusters, cluster_labels, self.output_dir, self.num_clusters)
         
         return clusters, cluster_labels, metrics
 
-    def generate_cluster_summaries(self, texts, clusters):
-        '''Generate meaningful summaries for each cluster using Mistral-7b'''
+    def generate_efficient_summaries(self, texts, clusters, cluster_labels):
+        '''Generate efficient summaries for each cluster using hybrid approach'''
         cluster_summaries = {}
         
-        for cluster_id in tqdm(range(self.num_clusters), desc="Generating cluster summaries: ", unit="cluster"):
+        for cluster_id in tqdm(range(self.num_clusters), desc="Analyzing clusters"):
             # get texts for this cluster
             cluster_texts = [texts[i] for i in range(len(texts)) if clusters[i] == cluster_id]
             
@@ -306,50 +312,68 @@ class DocumentClusterer:
                 continue
             
             # sample texts if cluster is too large (to avoid context length issues)
-            if len(cluster_texts) > 5:
+            if len(cluster_texts) > 10:
                 import random
                 random.seed(42)
-                cluster_texts = random.sample(cluster_texts, 5)
+                cluster_texts = random.sample(cluster_texts, 10)
                 
-            # # concatenate sample texts with clear separators:
-            # combined_text = "\n---\n".join(cluster_texts)
+            # 1. get key phrases:
+            key_phrases = self.summarizer.extract_key_phrases(cluster_texts)
             
-            # Limit individual text length and combine
-            max_text_length = 300  # characters per text
-            truncated_texts = [text[:max_text_length] + "..." if len(text) > max_text_length else text 
-                          for text in cluster_texts]
+            # 2. get representative sentences
+            rep_sentences = self.summarizer.get_representative_sentences(cluster_texts)
+            
+            # # 3. use mistral-7b only for final topic labeling with minimal context
+            # key_context = f"Key phrases: {', '.join(key_phrases[:5])}\n"
+            # key_context += f"TF-IDF cluster terms: {', '.join(cluster_labels[cluster_id])}\n"
+            # if rep_sentences:
+            #     key_context += f"Example content: {rep_sentences[0]}"
                 
-            # concatenate sample texts with clear separators:
-            combined_text = "\n---\n".join(truncated_texts)            
+            # print(f"Cluster: {cluster_id}\n{key_context}\n")         
             
-            # create prompt for model
-            prompt = f'''Analyze the following collection of related (clustered) documents and provide:
-            1. A concise topic label (3-5 words)
-            2. Three main themes or subjects discussed
-            3. A brief one-sentence summary
+            # # create prompt for model
+            # prompt = f"""Based on these key phrases, TF-IDF terms, and example content from a document cluster, provide a very brief topic label (3-5 words):
+            # {key_context}
+            # Topic label:""" 
             
-            Documents:
-            {combined_text}
+            # Filter TF-IDF terms to remove generic ones
+            filtered_tfidf_terms = [
+                term for term in cluster_labels[cluster_id]
+                if len(term) > 1 and term not in ENGLISH_STOP_WORDS
+            ]
             
-            Format your response as:
-            Topic: [topic label]
-            Themes: [theme 1], [theme 2], [theme 3], ...
-            Summary: [one-sentence summary]'''
+            # Create enhanced context
+            key_context = []
+            if key_phrases:
+                key_context.append(f"Key topics and phrases: {', '.join(key_phrases)}")
+            if filtered_tfidf_terms:
+                key_context.append(f"Frequently discussed terms: {', '.join(filtered_tfidf_terms)}")
+            if rep_sentences:
+                key_context.append(f"Example discussions:\n1. {rep_sentences[0]}")
+                if len(rep_sentences) > 1:
+                    key_context.append(f"2. {rep_sentences[1]}")
+                    
+            print(f"{key_context}")
             
-            # Tokenize with padding
+            prompt = f"""Based on the following information from a collection of related documents, provide a concise topic label (3-5 words) that captures the main theme:
+            {chr(10).join(key_context)}
+            Topic label:"""
+            
+            # Generate just the topic label
             inputs = self.tokenizer(
                 prompt,
                 padding=True,
                 truncation=True,
-                max_length=2048,  # Increased for longer context
+                max_length=512,
                 return_tensors="pt"
             ).to(self.device)
+            print("DEBUG: topic label created. Starting summary generation")
             
             # generate summary
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
-                    max_new_tokens=256, # control output length
+                    max_new_tokens=25, # control output length
                     num_return_sequences=1,
                     do_sample=True,
                     temperature=0.7,
@@ -357,11 +381,20 @@ class DocumentClusterer:
                     pad_token_id=self.tokenizer.pad_token_id,
                 )
                 
-            summary = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            topic_label = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            topic_label = topic_label[len(prompt):].strip()
             
-            # extract the generated part (after the prompt):
-            summary = summary[len(prompt):]
-            cluster_summaries[cluster_id] = summary.strip()
+            # combine results
+            summary = {
+                'topic': topic_label,
+                'tfidf_terms': cluster_labels[cluster_id],
+                'key_phrases': key_phrases[:5],
+                'representative_sentence': rep_sentences[0] if rep_sentences else ''
+            }
+            
+            print(summary)
+            
+            cluster_summaries[cluster_id] = summary
             
             # clear gpu/mps memory after each cluster
             if self.device.type == "mps":
@@ -369,21 +402,25 @@ class DocumentClusterer:
                 
         return cluster_summaries
     
-    def save_cluster_summaries(self, cluster_summaries):
-        '''Save cluster summaries to a results file.'''
-        summary_file = os.path.join(self.output_dir, 'results', 'cluster_summaries.txt')
+    def save_efficient_summaries(self, cluster_summaries):
+        """Save the efficient cluster summaries to a results file"""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        summary_file = os.path.join(self.output_dir, 'results', f'cluster_summaries_{timestamp}.txt')
         with open(summary_file, 'w') as f:
             for cluster_id, summary in cluster_summaries.items():
                 f.write(f"\nCluster {cluster_id}:\n")
-                f.write(f"{summary}\n")
-                f.write("-" * 80 + "\n")        
+                f.write(f"Topic: {summary['topic']}\n")
+                f.write(f"Key phrases: {', '.join(summary['key_phrases'])}\n")
+                f.write(f"Representative content: {summary['representative_sentence']}\n")
+                f.write("-" * 80 + "\n")
 
 def main():
     # Initialize clusterer
-    clusterer = DocumentClusterer(num_clusters=10, batch_size=5)
+    clusterer = DocumentClusterer(num_clusters=4, batch_size=5)
     
     # Process dataset
-    clusters, cluster_labels, metrics = clusterer.process_dataset(num_samples=200)
+    clusters, cluster_labels, metrics = clusterer.process_dataset(num_samples=50)
     
     # Print results
     print("\nClustering Results:")

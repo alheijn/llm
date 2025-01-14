@@ -20,3 +20,5 @@ seaborn
 accelerate
 psutil
 nlkt
+sententce-transformers
+tf-keras
