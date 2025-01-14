@@ -1,18 +1,12 @@
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from datasets import load_dataset
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
 import numpy as np
 import time
 import psutil
-import re
 from tqdm import tqdm
-import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
-from collections import Counter
-import seaborn as sns
 import platform
 from sklearn.datasets import fetch_20newsgroups
 import os
@@ -51,8 +45,10 @@ class DocumentClusterer:
         self.output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'output')
         for subdir in ['texts', 'plots', 'results']:
             os.makedirs(os.path.join(self.output_dir, subdir), exist_ok=True)
+            
+        # initialize EfficientClusterSummarizer
+        self.summarizer = efficient_cluster_summarizer.EfficientClusterSummarizer()
 
-        
     def setup_model(self):
         """Initialize the model optimized for Apple Silicon"""
         print(f"Loading model and tokenizer (using {self.device} device)...")
@@ -64,8 +60,7 @@ class DocumentClusterer:
                 torch.mps.set_per_process_memory_fraction(0.0)
                 print("Configured MPS memory management")
                 
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, use_fast=True)            
             # Add padding token if it doesn't exist
             if self.tokenizer.pad_token is None:
                 self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})        
@@ -254,7 +249,6 @@ class DocumentClusterer:
             raise ValueError(f"Dataset {dataset_name} not supported")
         
         
-
         # Track runtime and memory
         start_time = time.time()
 
@@ -269,7 +263,7 @@ class DocumentClusterer:
         
         # Get cluster labels
         cluster_labels = self.get_cluster_labels(texts, clusters, kmeans)
-        print("\nCluster Topics:")
+        print("Old Cluster Topics:")
         for cluster_id, terms in cluster_labels.items():
             print(f"Cluster {cluster_id}: {', '.join(terms)}")
         
@@ -284,10 +278,105 @@ class DocumentClusterer:
         }
 
         save_clustering_results(self.num_clusters, clusters, cluster_labels, metrics, texts)
+        
+        # Generate and save detailed summaries
+        print("\nGenerating cluster summaries start")
+        cluster_summaries = self.generate_cluster_summaries(texts, clusters)
+        self.save_cluster_summaries(cluster_summaries)
+        
+        print("\nCluster Summaries:")
+        for cluster_id, summary in cluster_summaries.items():
+            print(f"\nCluster {cluster_id}:")
+            print(summary)
 
         visualize_clusters(embeddings, clusters, cluster_labels, self.output_dir, self.num_clusters)
         
         return clusters, cluster_labels, metrics
+
+    def generate_cluster_summaries(self, texts, clusters):
+        '''Generate meaningful summaries for each cluster using Mistral-7b'''
+        cluster_summaries = {}
+        
+        for cluster_id in tqdm(range(self.num_clusters), desc="Generating cluster summaries: ", unit="cluster"):
+            # get texts for this cluster
+            cluster_texts = [texts[i] for i in range(len(texts)) if clusters[i] == cluster_id]
+            
+            if not cluster_texts:
+                cluster_summaries[cluster_id] = "Empty cluster"
+                continue
+            
+            # sample texts if cluster is too large (to avoid context length issues)
+            if len(cluster_texts) > 5:
+                import random
+                random.seed(42)
+                cluster_texts = random.sample(cluster_texts, 5)
+                
+            # # concatenate sample texts with clear separators:
+            # combined_text = "\n---\n".join(cluster_texts)
+            
+            # Limit individual text length and combine
+            max_text_length = 300  # characters per text
+            truncated_texts = [text[:max_text_length] + "..." if len(text) > max_text_length else text 
+                          for text in cluster_texts]
+                
+            # concatenate sample texts with clear separators:
+            combined_text = "\n---\n".join(truncated_texts)            
+            
+            # create prompt for model
+            prompt = f'''Analyze the following collection of related (clustered) documents and provide:
+            1. A concise topic label (3-5 words)
+            2. Three main themes or subjects discussed
+            3. A brief one-sentence summary
+            
+            Documents:
+            {combined_text}
+            
+            Format your response as:
+            Topic: [topic label]
+            Themes: [theme 1], [theme 2], [theme 3], ...
+            Summary: [one-sentence summary]'''
+            
+            # Tokenize with padding
+            inputs = self.tokenizer(
+                prompt,
+                padding=True,
+                truncation=True,
+                max_length=2048,  # Increased for longer context
+                return_tensors="pt"
+            ).to(self.device)
+            
+            # generate summary
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=256, # control output length
+                    num_return_sequences=1,
+                    do_sample=True,
+                    temperature=0.7,
+                    top_p=0.95,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                )
+                
+            summary = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+            # extract the generated part (after the prompt):
+            summary = summary[len(prompt):]
+            cluster_summaries[cluster_id] = summary.strip()
+            
+            # clear gpu/mps memory after each cluster
+            if self.device.type == "mps":
+                torch.mps.empty_cache()
+                
+        return cluster_summaries
+    
+    def save_cluster_summaries(self, cluster_summaries):
+        '''Save cluster summaries to a results file.'''
+        summary_file = os.path.join(self.output_dir, 'results', 'cluster_summaries.txt')
+        with open(summary_file, 'w') as f:
+            for cluster_id, summary in cluster_summaries.items():
+                f.write(f"\nCluster {cluster_id}:\n")
+                f.write(f"{summary}\n")
+                f.write("-" * 80 + "\n")        
 
 def main():
     # Initialize clusterer
