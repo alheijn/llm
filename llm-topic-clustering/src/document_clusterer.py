@@ -16,7 +16,7 @@ import string
 import nltk
 from helper.save_results import save_texts, save_clustering_results
 from helper.visualize_results import visualize_clusters
-import efficient_cluster_summarizer
+import cluster_summarizer
 from datasets import load_dataset
 from helper.load_multimonth_bbc import load_bbc_news_multimonth
 import random
@@ -52,7 +52,7 @@ class DocumentClusterer:
             os.makedirs(os.path.join(self.output_dir, subdir), exist_ok=True)
             
         # initialize EfficientClusterSummarizer
-        self.summarizer = efficient_cluster_summarizer.EfficientClusterSummarizer()
+        self.summarizer = cluster_summarizer.ClusterSummarizer()
 
     def setup_model(self):
         """Initialize the model optimized for Apple Silicon"""
@@ -174,7 +174,7 @@ class DocumentClusterer:
             stop_words=list(ENGLISH_STOP_WORDS),
             ngram_range=(1, 3),     # Include both single words and bigrams
             min_df=1,       # Term must appear in at least min_df documents
-            max_df=0.95     # Ignore terms that appear in more than max_df% of documents
+            max_df=0.90     # Ignore terms that appear in more than max_df% of documents
         )
 
         # # Preprocess texts again before TF-IDF
@@ -190,13 +190,6 @@ class DocumentClusterer:
             if cluster_docs.shape[0] == 0:
                 cluster_labels[i] = ["Empty cluster"]   # new
                 continue
-                
-            ### OLD CODE ###
-            # # Get top terms
-            # avg_tfidf = cluster_docs.mean(axis=0).A1
-            # top_indices = avg_tfidf.argsort()[-5:][::-1]
-            # top_terms = [tfidf.get_feature_names_out()[idx] for idx in top_indices]
-            # cluster_labels[i] = top_terms
 
             # Calculate mean TF-IDF scores for the cluster
             avg_tfidf = cluster_docs.mean(axis=0).A1
@@ -219,11 +212,11 @@ class DocumentClusterer:
                     unigrams.append(original_term)
             
                 # Stop if we have enough terms
-                if len(phrases) >= 2 and len(unigrams) >= 3:
+                if len(phrases) >= 3 and len(unigrams) >= 4:
                     break
         
             # Combine phrases and unigrams for final labels
-            top_terms = phrases[:2] + unigrams[:3]
+            top_terms = phrases[:3] + unigrams[:4]
             
             # Ensure we have at least some terms
             if not top_terms and candidates:
@@ -334,40 +327,16 @@ class DocumentClusterer:
                 }
                 continue
             
-            # sample texts if cluster is too large (to avoid context length issues)
-            # if len(cluster_texts) > 10:
-            #     random.seed(42)
-            #     cluster_texts = random.sample(cluster_texts, 10)
             selected_texts = self.summarizer.get_representative_texts(
-                cluster_texts=cluster_texts, cluster_labels=cluster_labels)
+                cluster_texts=cluster_texts, cluster_labels=cluster_labels, cluster_id=cluster_id)
                 
             combined_text = "\n---\n".join(selected_texts)
-
-            # 1. get key phrases:
-            # key_phrases = self.summarizer.extract_key_phrases(cluster_texts)
-            
-            # 2. get representative sentences
-            # rep_sentences = self.summarizer.get_representative_sentences(cluster_texts)
-            
-            # # 3. use mistral-7b only for final topic labeling with minimal context
-            # key_context = f"Key phrases: {', '.join(key_phrases[:5])}\n"
-            # key_context += f"TF-IDF cluster terms: {', '.join(cluster_labels[cluster_id])}\n"
-            # if rep_sentences:
-            #     key_context += f"Example content: {rep_sentences[0]}"
-                
-            # print(f"Cluster: {cluster_id}\n{key_context}\n")         
-            
-            # # create prompt for model
-            # prompt = f"""Based on these key phrases, TF-IDF terms, and example content from a document cluster, provide a very brief topic label (3-5 words):
-            # {key_context}
-            # Topic label:"""  
             
             # Create prompt
             prompt = (
-                "Generate a topic summary for a text cluster with:\n\n"
-                f"TF-IDF terms: {', '.join(cluster_labels[cluster_id])}.\n"
-                f"Example cluster content: {combined_text}\n"
-                # "Brief topic label:"
+                "Give a list of maximum 10 words that represent the topics of the cluster.:\n\n"
+                #f"TF-IDF terms: {', '.join(cluster_labels[cluster_id])}.\n"
+                f"Relevant cluster content: {combined_text}\n"
             )
             
             # Prepare input for model (DistilBART)
@@ -394,7 +363,6 @@ class DocumentClusterer:
                 )
                 
             topic_label = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            # topic_label = topic_label.replace("Brief topic label:", "").strip()
             
             # combine results
             summary = {
