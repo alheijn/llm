@@ -8,6 +8,54 @@ class EfficientClusterSummarizer:
         # initialize a smaller, more efficient model for sentence embeddings
         self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
         
+    def get_representative_texts(self, cluster_texts, cluster_labels, max_samples=10):
+        """Select most representative texts using TF-IDF and keyword density"""
+        # Initialize TF-IDF vectorizer
+        tfidf = TfidfVectorizer(
+            max_features=1000,
+            stop_words='english'
+        )
+        
+        # Get cluster TF-IDF matrix
+        tfidf_matrix = tfidf.fit_transform(cluster_texts)
+        
+        # Calculate centroid
+        centroid = tfidf_matrix.mean(axis=0).A1
+        
+        # Calculate similarity scores
+        similarities = np.dot(tfidf_matrix.toarray(), centroid.T)
+        
+        # # Calculate keyword density scores
+        # keywords = set(term.lower() for term in cluster_labels)
+        # # AttributeError: 'int' object has no attribute 'lower'
+        
+        # Get keywords from cluster labels
+        keywords = set()
+        for term in cluster_labels.values():
+            if isinstance(term, list):
+                keywords.update(word.lower() for word in term)
+            elif isinstance(term, str):
+                keywords.add(term.lower())     
+                   
+        print(f"DEBUG keywords={keywords}")
+        
+        keyword_scores = []
+        for text in cluster_texts:
+            words = set(text.lower().split())
+            density = len(words.intersection(keywords)) / len(words) if words else 0
+            keyword_scores.append(density)
+        
+        # Combine scores
+        final_scores = 0.7 * similarities.flatten() + 0.3 * np.array(keyword_scores)
+        
+        # Get indices of top scoring texts
+        top_indices = final_scores.argsort()[-max_samples:][::-1]
+        #print(f"DEBUG top_indices={top_indices}")
+        
+        #print(f"DEBUG cluster_texts[:4]={cluster_texts[:4]}")
+        
+        return [cluster_texts[i] for i in top_indices]
+        
     def get_representative_sentences(self, texts, n_sentences=3):
         '''Extract most representative sentences using sentence embeddings'''
         # # split texts into sentences and get embeddings

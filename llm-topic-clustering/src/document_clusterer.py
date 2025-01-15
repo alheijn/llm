@@ -1,5 +1,5 @@
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModelForSeq2SeqLM
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
@@ -17,9 +17,13 @@ import nltk
 from helper.save_results import save_texts, save_clustering_results
 from helper.visualize_results import visualize_clusters
 import efficient_cluster_summarizer
+from datasets import load_dataset
+from helper.load_multimonth_bbc import load_bbc_news_multimonth
+import random
 
 class DocumentClusterer:
-    def __init__(self, model_id="mistralai/Mistral-7B-v0.3", num_clusters=5, batch_size=5):
+    # def __init__(self, model_id="mistralai/Mistral-7B-v0.3", num_clusters=5, batch_size=5):
+    def __init__(self, model_id="sshleifer/distilbart-cnn-12-6", num_clusters=5, batch_size=5):
 
         os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
@@ -67,7 +71,8 @@ class DocumentClusterer:
                 self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})        
             
             # Load model with float16 on MPS for better memory efficiency
-            self.model = AutoModelForCausalLM.from_pretrained(
+            # self.model = AutoModelForCausalLM.from_pretrained(
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(                
                 self.model_id,
                 torch_dtype=torch.float16 if self.device == "mps" else torch.float32,
                 low_cpu_mem_usage=True
@@ -131,7 +136,7 @@ class DocumentClusterer:
                 batch_texts,
                 padding=True,
                 truncation=True,
-                max_length=512,
+                max_length=1024,
                 return_tensors="pt"
             ).to(self.device)
             
@@ -139,7 +144,7 @@ class DocumentClusterer:
             with torch.no_grad():
                 outputs = self.model(**inputs, output_hidden_states=True)
                 # Use the mean of the last hidden state as the embedding
-                batch_embeddings = outputs.hidden_states[-1].mean(dim=1)
+                batch_embeddings = outputs.encoder_last_hidden_state.mean(dim=1)
                 embeddings.append(batch_embeddings.cpu().numpy())        
 
             # Clear GPU/MPS memory after each batch
@@ -165,11 +170,11 @@ class DocumentClusterer:
     def get_cluster_labels(self, texts, clusters, kmeans):
         """Extract representative terms for each cluster using TF-IDF"""
         tfidf = TfidfVectorizer(
-            max_features=2000,
+            max_features=1000,
             stop_words=list(ENGLISH_STOP_WORDS),
             ngram_range=(1, 3),     # Include both single words and bigrams
             min_df=1,       # Term must appear in at least min_df documents
-            max_df=0.80     # Ignore terms that appear in more than max_df% of documents
+            max_df=0.95     # Ignore terms that appear in more than max_df% of documents
         )
 
         # # Preprocess texts again before TF-IDF
@@ -208,9 +213,9 @@ class DocumentClusterer:
             for term, score in candidates:
             # Separate unigrams and phrases
                 original_term = self.get_original_term(term)
-                if ' ' in term and score > 0.1:  # Higher threshold for phrases
+                if ' ' in term and score > 0.05:  # Higher threshold for phrases
                     phrases.append(term)
-                elif score > 0.05:  # Lower threshold for single words
+                elif score > 0.025:  # Lower threshold for single words
                     unigrams.append(original_term)
             
                 # Stop if we have enough terms
@@ -227,16 +232,14 @@ class DocumentClusterer:
             cluster_labels[i] = top_terms                   
             
         return cluster_labels
-        
-    def process_dataset(self, dataset_name="20newsgroups", num_samples=2000):
+
+    def process_dataset(self, dataset_name="bbc_news_alltime", num_samples=2000):
         """Main processing pipeline"""
         # Load and preprocess dataset
         if dataset_name == "20newsgroups":
-            dataset = fetch_20newsgroups(subset='train', remove=('headers', 'footers', 'quotes'), 
-                                         categories=['sci.electronics', 'talk.politics.misc', 'talk.religion.misc', 'rec.sport.hockey'])
+            dataset = fetch_20newsgroups(subset='train', remove=('headers', 'footers', 'quotes'))
             # Sample if needed
             if num_samples and num_samples < len(dataset.data):
-                import random
                 random.seed(42)
                 indices = random.sample(range(len(dataset.data)), num_samples)
                 texts = [dataset.data[i] for i in indices]
@@ -247,6 +250,21 @@ class DocumentClusterer:
                 save_texts(texts, categories=categories if dataset_name == "20newsgroups" else None)            
             else:
                 texts = dataset.data
+        elif dataset_name == "bbc_news_alltime":
+            # https://huggingface.co/datasets/RealTimeData/bbc_news_alltime
+            try:
+                texts = load_bbc_news_multimonth()
+                
+                # Sample if needed
+                if num_samples and num_samples < len(texts):
+                    random.seed(42)
+                    indices = random.sample(range(len(texts)), num_samples)
+                    texts = [texts[i] for i in indices]                    
+                    # Save input texts
+                    save_texts(texts)
+                
+            except Exception as e:
+                print(f"Error loading BBC News dataset: {e}")
         else:
             raise ValueError(f"Dataset {dataset_name} not supported")
         
@@ -271,7 +289,7 @@ class DocumentClusterer:
             
         # generate and save summaries using efficient approach with TF-IDF labels
         print("\nGenerating cluster summaries...")
-        cluster_summaries = self.generate_efficient_summaries(texts, clusters, cluster_labels)
+        cluster_summaries = self.generate_summaries(texts, clusters, cluster_labels)
         self.save_efficient_summaries(cluster_summaries)
         
         # Print summaries
@@ -280,8 +298,8 @@ class DocumentClusterer:
             print(f"\nCluster {cluster_id}:")
             print(f"Topic: {summary['topic']}")
             print(f"TF-IDF terms: {', '.join(summary['tfidf_terms'])}")
-            print(f"Key phrases: {', '.join(summary['key_phrases'])}")
-            print(f"Representative content: {summary['representative_sentence'][:200]}...")        
+            #print(f"Key phrases: {', '.join(summary['key_phrases'])}")
+            #print(f"Representative content: {summary['representative_sentence'][:200]}...")        
         
         # Calculate metrics
         end_time = time.time()
@@ -297,10 +315,11 @@ class DocumentClusterer:
 
         visualize_clusters(embeddings, clusters, cluster_labels, self.output_dir, self.num_clusters)
         
-        return clusters, cluster_labels, metrics
+        return clusters, cluster_labels, metrics, self.silhouette_avg
 
-    def generate_efficient_summaries(self, texts, clusters, cluster_labels):
-        '''Generate efficient summaries for each cluster using hybrid approach'''
+    # def generate_summaries(self, texts, clusters, cluster_labels):
+    def generate_summaries(self, texts, clusters, cluster_labels):
+        '''Generate summaries for each cluster'''
         cluster_summaries = {}
         
         for cluster_id in tqdm(range(self.num_clusters), desc="Analyzing clusters"):
@@ -308,20 +327,27 @@ class DocumentClusterer:
             cluster_texts = [texts[i] for i in range(len(texts)) if clusters[i] == cluster_id]
             
             if not cluster_texts:
-                cluster_summaries[cluster_id] = "Empty cluster"
+                cluster_summaries[cluster_id] = {
+                    'topic': "Empty cluster",
+                    'tfidf_terms': [],
+                    'example_texts': []
+                }
                 continue
             
             # sample texts if cluster is too large (to avoid context length issues)
-            if len(cluster_texts) > 10:
-                import random
-                random.seed(42)
-                cluster_texts = random.sample(cluster_texts, 10)
+            # if len(cluster_texts) > 10:
+            #     random.seed(42)
+            #     cluster_texts = random.sample(cluster_texts, 10)
+            selected_texts = self.summarizer.get_representative_texts(
+                cluster_texts=cluster_texts, cluster_labels=cluster_labels)
                 
+            combined_text = "\n---\n".join(selected_texts)
+
             # 1. get key phrases:
-            key_phrases = self.summarizer.extract_key_phrases(cluster_texts)
+            # key_phrases = self.summarizer.extract_key_phrases(cluster_texts)
             
             # 2. get representative sentences
-            rep_sentences = self.summarizer.get_representative_sentences(cluster_texts)
+            # rep_sentences = self.summarizer.get_representative_sentences(cluster_texts)
             
             # # 3. use mistral-7b only for final topic labeling with minimal context
             # key_context = f"Key phrases: {', '.join(key_phrases[:5])}\n"
@@ -334,65 +360,52 @@ class DocumentClusterer:
             # # create prompt for model
             # prompt = f"""Based on these key phrases, TF-IDF terms, and example content from a document cluster, provide a very brief topic label (3-5 words):
             # {key_context}
-            # Topic label:""" 
+            # Topic label:"""  
             
-            # Filter TF-IDF terms to remove generic ones
-            filtered_tfidf_terms = [
-                term for term in cluster_labels[cluster_id]
-                if len(term) > 1 and term not in ENGLISH_STOP_WORDS
-            ]
+            # Create prompt
+            prompt = (
+                "Generate a topic summary for a text cluster with:\n\n"
+                f"TF-IDF terms: {', '.join(cluster_labels[cluster_id])}.\n"
+                f"Example cluster content: {combined_text}\n"
+                # "Brief topic label:"
+            )
             
-            # Create enhanced context
-            key_context = []
-            if key_phrases:
-                key_context.append(f"Key topics and phrases: {', '.join(key_phrases)}")
-            if filtered_tfidf_terms:
-                key_context.append(f"Frequently discussed terms: {', '.join(filtered_tfidf_terms)}")
-            if rep_sentences:
-                key_context.append(f"Example discussions:\n1. {rep_sentences[0]}")
-                if len(rep_sentences) > 1:
-                    key_context.append(f"2. {rep_sentences[1]}")
-                    
-            print(f"{key_context}")
-            
-            prompt = f"""Based on the following information from a collection of related documents, provide a concise topic label (3-5 words) that captures the main theme:
-            {chr(10).join(key_context)}
-            Topic label:"""
-            
-            # Generate just the topic label
+            # Prepare input for model (DistilBART)
             inputs = self.tokenizer(
                 prompt,
                 padding=True,
                 truncation=True,
-                max_length=512,
+                max_length=2048,
                 return_tensors="pt"
             ).to(self.device)
-            print("DEBUG: topic label created. Starting summary generation")
+            
+            print("DEBUG: Starting summary generation")
             
             # generate summary
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
-                    max_new_tokens=25, # control output length
+                    max_new_tokens=100, # control output length
                     num_return_sequences=1,
-                    do_sample=True,
+                    early_stopping=True,
+                    num_beams=4,
                     temperature=0.7,
-                    top_p=0.95,
                     pad_token_id=self.tokenizer.pad_token_id,
                 )
                 
             topic_label = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            topic_label = topic_label[len(prompt):].strip()
+            # topic_label = topic_label.replace("Brief topic label:", "").strip()
             
             # combine results
             summary = {
                 'topic': topic_label,
                 'tfidf_terms': cluster_labels[cluster_id],
-                'key_phrases': key_phrases[:5],
-                'representative_sentence': rep_sentences[0] if rep_sentences else ''
+                'example_texts': combined_text
+                #'key_phrases': key_phrases[:5],
+                #'representative_sentence': rep_sentences[0] if rep_sentences else ''
             }
             
-            print(summary)
+            # print(f"DEBUG: {summary}")
             
             cluster_summaries[cluster_id] = summary
             
@@ -411,21 +424,23 @@ class DocumentClusterer:
             for cluster_id, summary in cluster_summaries.items():
                 f.write(f"\nCluster {cluster_id}:\n")
                 f.write(f"Topic: {summary['topic']}\n")
-                f.write(f"Key phrases: {', '.join(summary['key_phrases'])}\n")
-                f.write(f"Representative content: {summary['representative_sentence']}\n")
+                f.write(f"Example texts: {summary['example_texts']}\n")
+                #f.write(f"Key phrases: {', '.join(summary['key_phrases'])}\n")
+                #f.write(f"Representative content: {summary['representative_sentence']}\n")
                 f.write("-" * 80 + "\n")
 
 def main():
     # Initialize clusterer
-    clusterer = DocumentClusterer(num_clusters=4, batch_size=5)
+    clusterer = DocumentClusterer(num_clusters=20, batch_size=5)
     
     # Process dataset
-    clusters, cluster_labels, metrics = clusterer.process_dataset(num_samples=50)
+    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=1000)
     
     # Print results
     print("\nClustering Results:")
     print(f"Runtime: {metrics['runtime_seconds']:.2f} seconds")
     print(f"Memory Usage: {metrics['memory_usage_mb']:.2f} MB")
+    print(f"Silhouette Score: {silhouette_avg:.3f}")
     print("\nCluster Topics:")
     for cluster_id, terms in cluster_labels.items():
         print(f"Cluster {cluster_id}: {', '.join(terms)}")
