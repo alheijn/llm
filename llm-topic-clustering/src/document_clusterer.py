@@ -20,6 +20,9 @@ import cluster_summarizer
 from datasets import load_dataset
 from helper.load_multimonth_bbc import load_bbc_news_multimonth
 import random
+import spacy
+from collections import defaultdict
+
 
 class DocumentClusterer:
     # def __init__(self, model_id="mistralai/Mistral-7B-v0.3", num_clusters=5, batch_size=5):
@@ -45,6 +48,9 @@ class DocumentClusterer:
             nltk.data.find('tokenizers/punkt_tab')
         except LookupError:
             nltk.download('punkt_tab')
+            
+        # load spaCy model for Named Entity Recognition
+        self.nlp = spacy.load("en_core_web_sm")
 
         # create output directories to store the results
         self.output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'output')
@@ -124,13 +130,42 @@ class DocumentClusterer:
                     key=self.stem_map[stemmed_term].count)
         return stemmed_term
         
+    def extract_named_entities(self, texts, important_types={'PERSON', 'ORG', 'GPE', 'EVENT', 'FAC', 'PRODUCT'}):
+        '''Extract named entities from a list of texts'''
+        entities_by_text = []
+        
+        for text in texts:
+            doc = self.nlp(text[:100000])   # limit text length to avoid memory issues
+            
+            # extract entities of important types
+            text_entities = defaultdict(list)
+            for ent in doc.ents:
+                if ent.label_ in important_types:
+                    text_entities[ent.label_].append(ent.text)
+            
+            entities_by_text.append(dict(text_entities))
+        
+        #print(f"DEBUG: Entities for first text: {entities_by_text[0]}")
+        return entities_by_text
+        
+        
     def get_embeddings(self, texts, show_progress=True):
         """Generate embeddings for texts in batches"""
+        
+        # extract named entities for all texts
+        entities_by_text = self.extract_named_entities(texts)
+        
+        # combine original text with entities
+        combined_texts = []
+        for i, entities in enumerate(entities_by_text):
+            text = texts[i]
+            entity_text = ' '.join(f"{k}: {', '.join(v)}" for k, v in entities.items())
+            combined_texts.append(f"{text}\n{entity_text}")
+            
         embeddings = []
         iterator = tqdm(range(0, len(texts), self.batch_size), desc="Generating embeddings: ") if show_progress else range(0, len(texts), self.batch_size)
-        
         for i in iterator:
-            batch_texts = texts[i:i + self.batch_size]
+            batch_texts = combined_texts[i:i + self.batch_size]
             # Tokenize with padding
             inputs = self.tokenizer(
                 batch_texts,
@@ -177,51 +212,74 @@ class DocumentClusterer:
             max_df=0.90     # Ignore terms that appear in more than max_df% of documents
         )
 
-        # # Preprocess texts again before TF-IDF
-        # processed_texts = [self.preprocess_text(text) for text in texts]
-        # tfidf_matrix = tfidf.fit_transform(processed_texts)
         tfidf_matrix = tfidf.fit_transform(texts)
         feature_names = tfidf.get_feature_names_out()
         cluster_labels = {}
-
+        
+        # extract named entities for all texts
+        all_entities = self.extract_named_entities(texts)
+    
         for i in range(self.num_clusters):
             # Get texts in this cluster
             cluster_docs = tfidf_matrix[clusters == i]
             if cluster_docs.shape[0] == 0:
-                cluster_labels[i] = ["Empty cluster"]   # new
+                cluster_labels[i] = ["Empty cluster"]
                 continue
+            
+            # collect entities for this cluster
+            cluster_entities = defaultdict(int)
+            for idx in np.where(clusters == i)[0]:
+                doc_entities = all_entities[idx]
+                for entity_type, entity_list in doc_entities.items():
+                    for entity in entity_list:
+                        cluster_entities[entity] += 1
+                        
+            #print(f"DEBUG: Cluster {i} entities: {cluster_entities}")
+            
 
             # Calculate mean TF-IDF scores for the cluster
             avg_tfidf = cluster_docs.mean(axis=0).A1
             
             # Get candidate terms
-            top_indices = avg_tfidf.argsort()[-30:][::-1]  # Get more terms initially
+            top_indices = avg_tfidf.argsort()[-20:][::-1]  # Get more terms initially
             candidates = [(feature_names[idx], avg_tfidf[idx]) for idx in top_indices]  # store term and its tf-idf score
-            ## top_terms = []
+            top_terms = []
+            
+            # add most frequent entities to top terms first
+            sorted_entities = sorted(
+                cluster_entities.items(), key=lambda x: x[1], reverse=True
+            )
+            for entity, count in sorted_entities[:3]:
+                if count > 1:
+                    top_terms.append(entity)
 
             # Filter and group terms
             unigrams = []
             phrases = []
 
             for term, score in candidates:
-            # Separate unigrams and phrases
-                original_term = self.get_original_term(term)
-                if ' ' in term and score > 0.05:  # Higher threshold for phrases
-                    phrases.append(term)
-                elif score > 0.025:  # Lower threshold for single words
-                    unigrams.append(original_term)
+                if term not in top_terms:
+                    # Separate unigrams and phrases
+                    original_term = self.get_original_term(term)
+                    if ' ' in term and score > 0.05:  # Higher threshold for phrases
+                        phrases.append(term)
+                    elif score > 0.025:  # Lower threshold for single words
+                        unigrams.append(original_term)
             
                 # Stop if we have enough terms
-                if len(phrases) >= 3 and len(unigrams) >= 4:
+                if len(phrases) >= 2 and len(unigrams) >= 3:
                     break
         
             # Combine phrases and unigrams for final labels
-            top_terms = phrases[:3] + unigrams[:4]
+            top_terms.extend(phrases[:2])
+            top_terms.extend(unigrams[:3])
             
             # Ensure we have at least some terms
             if not top_terms and candidates:
                 top_terms = [self.get_original_term(term) for term, _ in candidates[:5]]
         
+            print(f"DEBUG: Cluster {i}: {', '.join(top_terms)}")
+            
             cluster_labels[i] = top_terms                   
             
         return cluster_labels
@@ -358,7 +416,7 @@ class DocumentClusterer:
                     num_return_sequences=1,
                     early_stopping=True,
                     num_beams=4,
-                    temperature=0.7,
+                    do_sample=True,
                     pad_token_id=self.tokenizer.pad_token_id,
                 )
                 
@@ -402,7 +460,7 @@ def main():
     clusterer = DocumentClusterer(num_clusters=20, batch_size=5)
     
     # Process dataset
-    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=1000)
+    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=4000)
     
     # Print results
     print("\nClustering Results:")

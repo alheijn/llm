@@ -22,3 +22,4 @@ psutil
 nlkt
 sententce-transformers
 tf-keras
+spaCy
