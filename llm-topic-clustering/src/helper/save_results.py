@@ -6,9 +6,6 @@ import numpy as np
 def save_texts(texts, output_dir, categories=None):
     """Save input texts and their categories"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    #output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'output')
-    #output_texts_dir = os.path.join(output_dir, 'texts')
-    #os.makedirs(output_texts_dir, exist_ok=True)
     output_path = os.path.join(output_dir, 'texts', f'input_texts_{timestamp}.json')
         
     data = {
@@ -23,7 +20,6 @@ def save_texts(texts, output_dir, categories=None):
 def save_clustering_results(num_clusters, clusters, cluster_labels, metrics, texts, output_dir):
     """Save clustering results"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    #output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'output')
     output_path = os.path.join(output_dir, 'results', f'clustering_results_{timestamp}.json')
         
     # Convert numpy types to native Python types
@@ -50,10 +46,10 @@ def save_clustering_results(num_clusters, clusters, cluster_labels, metrics, tex
         'silhouette_score': float(metrics.get('silhouette_score', 0)),
         'runtime_seconds': float(metrics.get('runtime_seconds', 0)),
         'memory_usage_mb': float(metrics.get('memory_usage_mb', 0)),
-        'cluster_labels': {str(k): v for k, v in cluster_labels.items()},
         'cluster_assignments': [
-            {'cluster_id': cluster_id, 'cluster_texts': texts}
-            for cluster_id, texts in cluster_assignments.items()
+            {'cluster_id': cluster_id,
+             'cluster_topics': cluster_labels.get(cluster_id, []),
+             'cluster_texts': texts} for cluster_id, texts in cluster_assignments.items()
         ]
     }
         
