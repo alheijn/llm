@@ -36,10 +36,6 @@ class ClusterSummarizer:
         # Calculate similarity scores
         similarities = np.dot(tfidf_matrix.toarray(), centroid.T)
         
-        # # Calculate keyword density scores
-        # keywords = set(term.lower() for term in cluster_labels)
-        # # AttributeError: 'int' object has no attribute 'lower'
-        
         # Get keywords from cluster labels
         keywords = set()
         current_cluster_labels = cluster_labels.get(cluster_id, [])
@@ -48,13 +44,7 @@ class ClusterSummarizer:
                 if isinstance(label, str):
                     keywords.add(label)
         elif isinstance(current_cluster_labels, str):
-            keywords.add(current_cluster_labels)
-        
-        # for term in cluster_labels.values():
-        #     if isinstance(term, list):
-        #         keywords.update(word.lower() for word in term)
-        #     elif isinstance(term, str):
-        #         keywords.add(term.lower())     
+            keywords.add(current_cluster_labels)  
                    
         print(f"DEBUG cluster_id={cluster_id} keywords={keywords}")
         

@@ -58,3 +58,16 @@ def save_clustering_results(num_clusters, clusters, cluster_labels, metrics, tex
         
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
+        
+    
+def save_summaries(cluster_summaries, output_dir):
+    """Save the efficient cluster summaries to a results file"""
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    summary_file = os.path.join(output_dir, 'results', f'cluster_summaries_{timestamp}.txt')
+    with open(summary_file, 'w') as f:
+        for cluster_id, summary in cluster_summaries.items():
+            f.write(f"\nCluster {cluster_id}:\n")
+            f.write(f"Topic: {summary['topic']}\n")
+            f.write(f"Example texts: {summary['example_texts']}\n")
+            f.write("-" * 80 + "\n")        

@@ -14,14 +14,16 @@ from nltk.stem import PorterStemmer
 from nltk.tokenize import word_tokenize
 import string
 import nltk
-from helper.save_results import save_texts, save_clustering_results
+from helper.save_results import save_texts, save_clustering_results, save_summaries
 from helper.visualize_results import visualize_clusters
 import cluster_summarizer
 from datasets import load_dataset
-from helper.load_multimonth_bbc import load_bbc_news_multimonth
+from helper.load_multimonth_bbc import load_bbc_news_multimonth, load_preprocessed_data
 import random
 import spacy
 from collections import defaultdict
+from bertopic import BERTopic
+from sklearn.decomposition import LatentDirichletAllocation, NMF
 
 
 class DocumentClusterer:
@@ -124,8 +126,7 @@ class DocumentClusterer:
         
         #print(f"DEBUG: Entities for first text: {entities_by_text[0]}")
         return entities_by_text
-        
-        
+      
     def get_embeddings(self, texts, show_progress=True):
         """Generate embeddings for texts in batches"""
         
@@ -183,7 +184,10 @@ class DocumentClusterer:
             clusters = kmeans.fit_predict(embeddings)
             
             silhouette_avg = silhouette_score(embeddings, clusters)
-            print(f"Silhouette Score for {n_clusters} clusters: {silhouette_avg:.3f}")
+            print(f"Silhouette Score for cluster {n_clusters}: {silhouette_avg:.3f}")
+            
+            self.calinski_harabasz = calinski_harabasz_score(embeddings, clusters)
+            print(f"Calinski Harabasz Score for cluster {n_clusters}: {self.calinski_harabasz:.3f}")            
             
             if silhouette_avg > best_silhouette_score:
                 best_silhouette_score = silhouette_avg
@@ -196,23 +200,6 @@ class DocumentClusterer:
         print(f"Best number of clusters: {best_num_clusters} with Silhouette Score: {best_silhouette_score:.3f}")
         
         return best_clusters, best_kmeans
-    
-        # """Perform K-means clustering"""
-                
-        # print(f"Clustering {len(embeddings)} documents into {self.num_clusters} clusters...")
-        # kmeans = KMeans(n_clusters=self.num_clusters, random_state=42)
-        # clusters = kmeans.fit_predict(embeddings)
-        
-        # # Calculate silhouette score
-        # silhouette_avg = silhouette_score(embeddings, clusters)
-        # self.silhouette_avg = silhouette_avg
-        # print(f"Silhouette Score: {silhouette_avg:.3f}")
-        
-        
-        # self.calinski_harabasz = calinski_harabasz_score(embeddings, clusters)
-        # print(f"CALINSKI HARABASZ Score: {silhouette_avg:.3f}")
-
-        # return clusters, kmeans
         
     def get_cluster_labels(self, texts, clusters, kmeans):
         """Extract representative terms for each cluster using TF-IDF"""
@@ -253,7 +240,7 @@ class DocumentClusterer:
             avg_tfidf = cluster_docs.mean(axis=0).A1
             
             # Get candidate terms
-            top_indices = avg_tfidf.argsort()[-20:][::-1]  # Get more terms initially
+            top_indices = avg_tfidf.argsort()[-30:][::-1]  # Get more terms initially
             candidates = [(feature_names[idx], avg_tfidf[idx]) for idx in top_indices]  # store term and its tf-idf score
             top_terms = []
             
@@ -261,7 +248,7 @@ class DocumentClusterer:
             sorted_entities = sorted(
                 cluster_entities.items(), key=lambda x: x[1], reverse=True
             )
-            for entity, count in sorted_entities[:3]:
+            for entity, count in sorted_entities[:5]:
                 if count > 1:
                     top_terms.append(entity)
 
@@ -278,7 +265,7 @@ class DocumentClusterer:
                         unigrams.append(term)
             
                 # Stop if we have enough terms
-                if len(phrases) >= 2 and len(unigrams) >= 3:
+                if len(phrases) >= 3 and len(unigrams) >= 3:
                     break
         
             # Combine phrases and unigrams for final labels
@@ -296,39 +283,8 @@ class DocumentClusterer:
 
     def process_dataset(self, dataset_name="bbc_news_alltime", num_samples=2000):
         """Main processing pipeline"""
-        # Load and preprocess dataset
-        if dataset_name == "20newsgroups":
-            dataset = fetch_20newsgroups(subset='train', remove=('headers', 'footers', 'quotes'))
-            # Sample if needed
-            if num_samples and num_samples < len(dataset.data):
-                random.seed(42)
-                indices = random.sample(range(len(dataset.data)), num_samples)
-                texts = [dataset.data[i] for i in indices]
-                categories = [dataset.target_names[dataset.target[i]] for i in indices]
-                print(f"\nSampled categories: {set(categories)}")    
-
-                # Save input texts
-                save_texts(texts, self.output_dir, categories=categories if dataset_name == "20newsgroups" else None)            
-            else:
-                texts = dataset.data
-        elif dataset_name == "bbc_news_alltime":
-            # https://huggingface.co/datasets/RealTimeData/bbc_news_alltime
-            try:
-                texts = load_bbc_news_multimonth()
-                
-                # Sample if needed
-                if num_samples and num_samples < len(texts):
-                    random.seed(42)
-                    indices = random.sample(range(len(texts)), num_samples)
-                    texts = [texts[i] for i in indices]                    
-                    # Save input texts
-                    save_texts(texts, self.output_dir)
-                
-            except Exception as e:
-                print(f"Error loading BBC News dataset: {e}")
-        else:
-            raise ValueError(f"Dataset {dataset_name} not supported")
         
+        texts = load_preprocessed_data(dataset_name, num_samples, self.output_dir)
         
         # Track runtime and memory
         start_time = time.time()
@@ -354,7 +310,7 @@ class DocumentClusterer:
         # generate and save summaries using efficient approach with TF-IDF labels
         print("\nGenerating cluster summaries...")
         cluster_summaries = self.generate_summaries(texts, clusters, cluster_labels)
-        self.save_efficient_summaries(cluster_summaries)
+        save_summaries(cluster_summaries, self.output_dir)
         
         # Print summaries
         print("\nCluster Summaries:")
@@ -403,9 +359,8 @@ class DocumentClusterer:
             
             # Create prompt
             prompt = (
-                "Give a list of maximum 10 words that represent the topics of the cluster.:\n\n"
-                #f"TF-IDF terms: {', '.join(cluster_labels[cluster_id])}.\n"
-                f"Relevant cluster content: {combined_text}\n"
+                "Get overall topics and themes of text cluster:\n\n"
+                f"Cluster content: {combined_text}\n"
             )
             
             # Prepare input for model (DistilBART)
@@ -438,8 +393,6 @@ class DocumentClusterer:
                 'topic': topic_label,
                 'tfidf_terms': cluster_labels[cluster_id],
                 'example_texts': combined_text
-                #'key_phrases': key_phrases[:5],
-                #'representative_sentence': rep_sentences[0] if rep_sentences else ''
             }
             
             # print(f"DEBUG: {summary}")
@@ -451,27 +404,13 @@ class DocumentClusterer:
                 torch.mps.empty_cache()
                 
         return cluster_summaries
-    
-    def save_efficient_summaries(self, cluster_summaries):
-        """Save the efficient cluster summaries to a results file"""
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        summary_file = os.path.join(self.output_dir, 'results', f'cluster_summaries_{timestamp}.txt')
-        with open(summary_file, 'w') as f:
-            for cluster_id, summary in cluster_summaries.items():
-                f.write(f"\nCluster {cluster_id}:\n")
-                f.write(f"Topic: {summary['topic']}\n")
-                f.write(f"Example texts: {summary['example_texts']}\n")
-                #f.write(f"Key phrases: {', '.join(summary['key_phrases'])}\n")
-                #f.write(f"Representative content: {summary['representative_sentence']}\n")
-                f.write("-" * 80 + "\n")
 
 def main():
     # Initialize clusterer
     clusterer = DocumentClusterer(num_clusters=10, batch_size=5)
     
     # Process dataset
-    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=200)
+    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=400)
     
     # Print results
     print("\nClustering Results:")
