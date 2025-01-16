@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModelForSeq2SeqLM
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, calinski_harabasz_score
 from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
 import numpy as np
 import time
@@ -97,6 +97,10 @@ class DocumentClusterer:
         """Basic text preprocessing"""
         # convert to lowercase
         text = text.lower()
+        
+        bbc_phrases = ['bbc', 'said', 'says', 'told', 'according to', 'reported']
+        for phrase in bbc_phrases:
+            text = text.replace(phrase, '')
         # tokenize
         tokens = word_tokenize(text)
 
@@ -190,17 +194,54 @@ class DocumentClusterer:
         # return embeddings
         
     def cluster_documents(self, embeddings):
-        """Perform K-means clustering"""
-        print(f"Clustering {len(embeddings)} documents into {self.num_clusters} clusters...")
-        kmeans = KMeans(n_clusters=self.num_clusters, random_state=42)
-        clusters = kmeans.fit_predict(embeddings)
+        """Perform K-means clustering with the best number of clusters based on silhouette score"""
         
-        # Calculate silhouette score
-        silhouette_avg = silhouette_score(embeddings, clusters)
-        self.silhouette_avg = silhouette_avg
-        print(f"Silhouette Score: {silhouette_avg:.3f}")
+        best_num_clusters = self.num_clusters
+        best_silhouette_score = -1
+        best_clusters = None
+        best_kmeans = None
         
-        return clusters, kmeans
+        for n_clusters in range(self.num_clusters - int(2*self.num_clusters/3), self.num_clusters + int(2*self.num_clusters/3)):
+            if n_clusters < 2:
+                continue
+            
+            print(f"Clustering with {n_clusters} clusters...")
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+            clusters = kmeans.fit_predict(embeddings)
+            
+            silhouette_avg = silhouette_score(embeddings, clusters)
+            print(f"Silhouette Score for {n_clusters} clusters: {silhouette_avg:.3f}")
+            
+            if silhouette_avg > best_silhouette_score:
+                best_silhouette_score = silhouette_avg
+                best_num_clusters = n_clusters
+                best_clusters = clusters
+                best_kmeans = kmeans
+        
+        self.num_clusters = best_num_clusters
+        self.silhouette_avg = best_silhouette_score
+        print(f"Best number of clusters: {best_num_clusters} with Silhouette Score: {best_silhouette_score:.3f}")
+        
+        return best_clusters, best_kmeans
+    
+        # """Perform K-means clustering"""
+        
+        # # TODO: cluster multiple times with different number of clusters and take the one with the best silhouette score
+        
+        # print(f"Clustering {len(embeddings)} documents into {self.num_clusters} clusters...")
+        # kmeans = KMeans(n_clusters=self.num_clusters, random_state=42)
+        # clusters = kmeans.fit_predict(embeddings)
+        
+        # # Calculate silhouette score
+        # silhouette_avg = silhouette_score(embeddings, clusters)
+        # self.silhouette_avg = silhouette_avg
+        # print(f"Silhouette Score: {silhouette_avg:.3f}")
+        
+        
+        # self.calinski_harabasz = calinski_harabasz_score(embeddings, clusters)
+        # print(f"CALINSKI HARABASZ Score: {silhouette_avg:.3f}")
+
+        # return clusters, kmeans
         
     def get_cluster_labels(self, texts, clusters, kmeans):
         """Extract representative terms for each cluster using TF-IDF"""
@@ -298,7 +339,7 @@ class DocumentClusterer:
                 print(f"\nSampled categories: {set(categories)}")    
 
                 # Save input texts
-                save_texts(texts, categories=categories if dataset_name == "20newsgroups" else None)            
+                save_texts(texts, self.output_dir, categories=categories if dataset_name == "20newsgroups" else None)            
             else:
                 texts = dataset.data
         elif dataset_name == "bbc_news_alltime":
@@ -312,7 +353,7 @@ class DocumentClusterer:
                     indices = random.sample(range(len(texts)), num_samples)
                     texts = [texts[i] for i in indices]                    
                     # Save input texts
-                    save_texts(texts)
+                    save_texts(texts, self.output_dir)
                 
             except Exception as e:
                 print(f"Error loading BBC News dataset: {e}")
@@ -324,12 +365,15 @@ class DocumentClusterer:
         start_time = time.time()
 
         # Preprocess all texts
+        print("\nDEBUG: start preprocessing")
         texts = [self.preprocess_text(text) for text in texts]
 
         # Generate embeddings
+        print("\nDEBUG: start generating embeddings")
         embeddings = self.get_embeddings(texts)
         
         # Perform clustering
+        print("\nDEBUG: start clustering")        
         clusters, kmeans = self.cluster_documents(embeddings)
         
         # Get cluster labels using TF-IDF
@@ -362,7 +406,7 @@ class DocumentClusterer:
             "silhouette_score": self.silhouette_avg
         }
 
-        save_clustering_results(self.num_clusters, clusters, cluster_labels, metrics, texts)
+        save_clustering_results(self.num_clusters, clusters, cluster_labels, metrics, texts, self.output_dir)
 
         visualize_clusters(embeddings, clusters, cluster_labels, self.output_dir, self.num_clusters)
         
@@ -460,7 +504,7 @@ def main():
     clusterer = DocumentClusterer(num_clusters=20, batch_size=5)
     
     # Process dataset
-    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=4000)
+    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=400)
     
     # Print results
     print("\nClustering Results:")
