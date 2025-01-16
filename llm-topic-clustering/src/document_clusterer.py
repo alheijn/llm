@@ -361,9 +361,7 @@ class DocumentClusterer:
         for cluster_id, summary in cluster_summaries.items():
             print(f"\nCluster {cluster_id}:")
             print(f"Topic: {summary['topic']}")
-            print(f"TF-IDF terms: {', '.join(summary['tfidf_terms'])}")
-            #print(f"Key phrases: {', '.join(summary['key_phrases'])}")
-            #print(f"Representative content: {summary['representative_sentence'][:200]}...")        
+            print(f"TF-IDF terms: {', '.join(summary['tfidf_terms'])}")    
         
         # Calculate metrics
         end_time = time.time()
