@@ -1,3 +1,5 @@
+# OUTDATED! CODE DOES NOT WORK!
+
 Note: AI-generated
 # LLM Topic Clustering Project
 
