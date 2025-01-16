@@ -36,6 +36,7 @@ class DocumentClusterer:
         self.model_id = model_id
         self.num_clusters = num_clusters
         self.batch_size = batch_size
+        self.num_topics = 5
         # Check if running on Apple Silicon
         self.is_apple_silicon = platform.processor() == 'arm'
         # Use MPS if available on Apple Silicon, otherwise CPU
@@ -167,21 +168,58 @@ class DocumentClusterer:
         return np.vstack(embeddings)
         # return embeddings
         
-    def cluster_documents(self, embeddings):
-        """Perform K-means clustering with the best number of clusters based on silhouette score"""
+    def get_topic_distributions(self, texts):
+        self.topic_model = NMF(
+            n_components=self.num_topics,
+            init='nndsvd',
+            random_state=42
+        )    
         
+        # Create TF-IDF matrix for traditional topic models
+        tfidf = TfidfVectorizer(
+            max_features=1000,
+            stop_words=list(ENGLISH_STOP_WORDS),
+            ngram_range=(1, 2)
+        )
+        doc_term_matrix = tfidf.fit_transform(texts)
+        
+        # Fit topic model and get document-topic distributions
+        topic_distributions = self.topic_model.fit_transform(doc_term_matrix)
+        
+        # Store vocabulary for potential later use
+        self.feature_names = tfidf.get_feature_names_out()
+        
+        return topic_distributions
+        
+    def cluster_documents(self, embeddings, topic_distributions):
+        """Perform K-means clustering with the best number of clusters based on silhouette score"""
+        # combine embeddings with topic distributions
+        # normalize both matrices
+        norm_embeddings = embeddings / (np.linalg.norm(embeddings, axis=1)[:, np.newaxis]+ 1e-8)
+        norm_topics = topic_distributions / (np.linalg.norm(topic_distributions, axis=1)[:, np.newaxis]+ 1e-8)
+        
+        # combine features with weighting
+        combined_features = np.hstack([
+            norm_embeddings * 0.7,  # Weight for embeddings
+            norm_topics * 0.3       # Weight for topic distributions
+        ])
+        
+        # Handle NaN values in combined_features - more detailed solution: https://scikit-learn.org/stable/modules/impute.html
+        combined_features = np.nan_to_num(combined_features, nan=0.0)
+
         best_num_clusters = self.num_clusters
         best_silhouette_score = -1
         best_clusters = None
         best_kmeans = None
         
-        for n_clusters in range(self.num_clusters - int(2*self.num_clusters/3), self.num_clusters + int(2*self.num_clusters/3)):
+        for n_clusters in range(int(self.num_clusters/3), self.num_clusters + int(2*self.num_clusters/3)):
             if n_clusters < 2:
                 continue
             
             print(f"Clustering with {n_clusters} clusters...")
             kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-            clusters = kmeans.fit_predict(embeddings)
+            clusters = kmeans.fit_predict(combined_features)
+            # clusters = kmeans.fit_predict(embeddings)            
             
             silhouette_avg = silhouette_score(embeddings, clusters)
             print(f"Silhouette Score for cluster {n_clusters}: {silhouette_avg:.3f}")
@@ -201,7 +239,7 @@ class DocumentClusterer:
         
         return best_clusters, best_kmeans
         
-    def get_cluster_labels(self, texts, clusters, kmeans):
+    def get_cluster_labels(self, texts, clusters, kmeans, topic_distributions):
         """Extract representative terms for each cluster using TF-IDF"""
         tfidf = TfidfVectorizer(
             max_features=1000,
@@ -231,16 +269,13 @@ class DocumentClusterer:
                 doc_entities = all_entities[idx]
                 for entity_type, entity_list in doc_entities.items():
                     for entity in entity_list:
-                        cluster_entities[entity] += 1
-                        
-            #print(f"DEBUG: Cluster {i} entities: {cluster_entities}")
-            
+                        cluster_entities[entity] += 1            
 
             # Calculate mean TF-IDF scores for the cluster
             avg_tfidf = cluster_docs.mean(axis=0).A1
             
             # Get candidate terms
-            top_indices = avg_tfidf.argsort()[-30:][::-1]  # Get more terms initially
+            top_indices = avg_tfidf.argsort()[-20:][::-1]  # Get more terms initially
             candidates = [(feature_names[idx], avg_tfidf[idx]) for idx in top_indices]  # store term and its tf-idf score
             top_terms = []
             
@@ -265,21 +300,54 @@ class DocumentClusterer:
                         unigrams.append(term)
             
                 # Stop if we have enough terms
-                if len(phrases) >= 3 and len(unigrams) >= 3:
+                if len(phrases) >= 2 and len(unigrams) >= 3:
                     break
         
             # Combine phrases and unigrams for final labels
-            top_terms.extend(phrases[:2])
+            top_terms.extend(phrases[:3])
             top_terms.extend(unigrams[:3])
             
             # Ensure we have at least some terms
             if not top_terms and candidates:
                 top_terms = [term for term, _ in candidates[:5]]
-            print(f"DEBUG: Cluster {i}: {', '.join(top_terms)}")
+            print(f"DEBUG: Cluster {i} labels before NMF: {', '.join(top_terms)}")
             
-            cluster_labels[i] = top_terms                   
+            cluster_labels[i] = top_terms
             
-        return cluster_labels
+        ##############################
+        # NMF topic terms
+        self.topic_terms = []
+        for topic_idx in range(self.num_topics):
+            top_term_indices = np.argsort(self.topic_model.components_[topic_idx])[-5:][::-1]
+            self.topic_terms.append([self.feature_names[i] for i in top_term_indices])
+        
+        enhanced_labels = {}
+        for cluster_id in range(self.num_clusters):
+            # get documents in this cluster
+            cluster_mask = clusters == cluster_id
+            cluster_docs = topic_distributions[cluster_mask]
+            
+            if len(cluster_docs) == 0:
+                enhanced_labels[cluster_id] = cluster_labels[cluster_id]
+                continue
+            
+            # calculate average topic distribution for this cluster
+            avg_topic_dist = cluster_docs.mean(axis=0)
+            
+            # get indices of top 2 topics for this cluster
+            dominant_topic_indices = np.argsort(avg_topic_dist)[-2:]
+            
+            # start with existing labels
+            enhanced_terms = set(cluster_labels[cluster_id])
+            # add terms from dominant topics
+            for topic_idx in dominant_topic_indices:
+                # add top terms from this topic
+                enhanced_terms.update(self.topic_terms[topic_idx])
+                
+            # convert back to list and limit to top terms
+            enhanced_labels[cluster_id] = list(enhanced_terms)[:15]
+        
+        return enhanced_labels
 
     def process_dataset(self, dataset_name="bbc_news_alltime", num_samples=2000):
         """Main processing pipeline"""
@@ -297,12 +365,16 @@ class DocumentClusterer:
         print("\nDEBUG: start generating embeddings")
         embeddings = self.get_embeddings(texts)
         
+        # Generate NMF topic distribution
+        print("\nDEBUG: start generating topic distributions")
+        topic_distributions = self.get_topic_distributions(texts)
+        
         # Perform clustering
         print("\nDEBUG: start clustering")        
-        clusters, kmeans = self.cluster_documents(embeddings)
+        clusters, kmeans = self.cluster_documents(embeddings, topic_distributions)
         
         # Get cluster labels using TF-IDF
-        cluster_labels = self.get_cluster_labels(texts, clusters, kmeans)
+        cluster_labels = self.get_cluster_labels(texts, clusters, kmeans, topic_distributions)
         print("TF-IDF Cluster Topics:")
         for cluster_id, terms in cluster_labels.items():
             print(f"Cluster {cluster_id}: {', '.join(terms)}")
@@ -407,7 +479,7 @@ class DocumentClusterer:
 
 def main():
     # Initialize clusterer
-    clusterer = DocumentClusterer(num_clusters=10, batch_size=5)
+    clusterer = DocumentClusterer(num_clusters=20, batch_size=5)
     
     # Process dataset
     clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=400)
