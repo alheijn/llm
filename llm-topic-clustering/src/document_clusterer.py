@@ -98,41 +98,14 @@ class DocumentClusterer:
         # convert to lowercase
         text = text.lower()
         
-        bbc_phrases = ['bbc', 'said', 'says', 'told', 'according to', 'reported']
-        for phrase in bbc_phrases:
+        phrases_to_remove = ['bbc', 'said', 'says', 'told', 'according to', 'reported', 'mr',
+                       'This video can not be played To play this video you need to enable JavaScript in your browser.',
+                       '\n', '\"', '\u201c', '\u201d', '\u2019s', r'\u00a', r'\u00d3' ]
+        for phrase in phrases_to_remove:
             text = text.replace(phrase, '')
-        # tokenize
-        tokens = word_tokenize(text)
-
-        # Create mapping of stemmed to original words
-        stem_map = {}
-        processed_tokens = []        
-
-        for token in tokens:
-            if token not in string.punctuation:
-                stemmed = self.stemmer.stem(token)
-                if stemmed not in stem_map:
-                    stem_map[stemmed] = []
-                stem_map[stemmed].append(token)
-                if token not in ENGLISH_STOP_WORDS and len(token) > 2:
-                    processed_tokens.append(stemmed)
         
-        # store mapping for later use
-        self.stem_map = stem_map
-        # rejoin tokens
-        return ' '.join(tokens)
-    
-    def get_original_term(self, stemmed_term):
-        """Get most common original form of a stemmed term"""
-        if ' ' in stemmed_term:
-            # Handle phrases
-            return ' '.join(self.get_original_term(word) for word in stemmed_term.split())
-        
-        if stemmed_term in self.stem_map:
-            # Return most frequent original form
-            return max(set(self.stem_map[stemmed_term]), 
-                    key=self.stem_map[stemmed_term].count)
-        return stemmed_term
+            
+        return text
         
     def extract_named_entities(self, texts, important_types={'PERSON', 'ORG', 'GPE', 'EVENT', 'FAC', 'PRODUCT'}):
         '''Extract named entities from a list of texts'''
@@ -225,9 +198,7 @@ class DocumentClusterer:
         return best_clusters, best_kmeans
     
         # """Perform K-means clustering"""
-        
-        # # TODO: cluster multiple times with different number of clusters and take the one with the best silhouette score
-        
+                
         # print(f"Clustering {len(embeddings)} documents into {self.num_clusters} clusters...")
         # kmeans = KMeans(n_clusters=self.num_clusters, random_state=42)
         # clusters = kmeans.fit_predict(embeddings)
@@ -301,11 +272,10 @@ class DocumentClusterer:
             for term, score in candidates:
                 if term not in top_terms:
                     # Separate unigrams and phrases
-                    original_term = self.get_original_term(term)
                     if ' ' in term and score > 0.05:  # Higher threshold for phrases
                         phrases.append(term)
                     elif score > 0.025:  # Lower threshold for single words
-                        unigrams.append(original_term)
+                        unigrams.append(term)
             
                 # Stop if we have enough terms
                 if len(phrases) >= 2 and len(unigrams) >= 3:
@@ -317,8 +287,7 @@ class DocumentClusterer:
             
             # Ensure we have at least some terms
             if not top_terms and candidates:
-                top_terms = [self.get_original_term(term) for term, _ in candidates[:5]]
-        
+                top_terms = [term for term, _ in candidates[:5]]
             print(f"DEBUG: Cluster {i}: {', '.join(top_terms)}")
             
             cluster_labels[i] = top_terms                   
@@ -501,10 +470,10 @@ class DocumentClusterer:
 
 def main():
     # Initialize clusterer
-    clusterer = DocumentClusterer(num_clusters=20, batch_size=5)
+    clusterer = DocumentClusterer(num_clusters=10, batch_size=5)
     
     # Process dataset
-    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=400)
+    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=200)
     
     # Print results
     print("\nClustering Results:")
