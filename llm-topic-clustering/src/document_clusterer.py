@@ -11,14 +11,11 @@ import platform
 from sklearn.datasets import fetch_20newsgroups
 import os
 from nltk.stem import PorterStemmer
-from nltk.tokenize import word_tokenize
-import string
 import nltk
 from helper.save_results import save_texts, save_clustering_results, save_summaries
 from helper.visualize_results import visualize_clusters
 import cluster_summarizer
-from datasets import load_dataset
-from helper.load_multimonth_bbc import load_bbc_news_multimonth, load_preprocessed_data
+from helper.load_multimonth_bbc import load_preprocessed_data
 import random
 import spacy
 from collections import defaultdict
@@ -27,7 +24,7 @@ from sklearn.decomposition import LatentDirichletAllocation, NMF
 
 
 class DocumentClusterer:
-    # def __init__(self, model_id="mistralai/Mistral-7B-v0.3", num_clusters=5, batch_size=5):
+    # def __init__(self, model_id="mistralai/Mistral-7B-v0.3", num_clusters=5, batch_size=5): ### ATTENTION! some other things need to be changed as well for Mistral-7B to work
     def __init__(self, model_id="sshleifer/distilbart-cnn-12-6", num_clusters=5, batch_size=5):
 
         os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -134,7 +131,7 @@ class DocumentClusterer:
         # extract named entities for all texts
         entities_by_text = self.extract_named_entities(texts)
         
-        # combine original text with entities
+        # combine original text with recognized named entities
         combined_texts = []
         for i, entities in enumerate(entities_by_text):
             text = texts[i]
@@ -388,7 +385,7 @@ class DocumentClusterer:
         print("\nCluster Summaries:")
         for cluster_id, summary in cluster_summaries.items():
             print(f"\nCluster {cluster_id}:")
-            print(f"Topic: {summary['topic']}")
+            print(f"Summary: {summary['topic']}")
             print(f"TF-IDF terms: {', '.join(summary['tfidf_terms'])}")    
         
         # Calculate metrics
@@ -407,7 +404,6 @@ class DocumentClusterer:
         
         return clusters, cluster_labels, metrics, self.silhouette_avg
 
-    # def generate_summaries(self, texts, clusters, cluster_labels):
     def generate_summaries(self, texts, clusters, cluster_labels):
         '''Generate summaries for each cluster'''
         cluster_summaries = {}
@@ -479,10 +475,10 @@ class DocumentClusterer:
 
 def main():
     # Initialize clusterer
-    clusterer = DocumentClusterer(num_clusters=20, batch_size=5)
+    clusterer = DocumentClusterer(num_clusters=50, batch_size=5)
     
     # Process dataset
-    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=1000)
+    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=500)
     
     # Print results
     print("\nClustering Results:")

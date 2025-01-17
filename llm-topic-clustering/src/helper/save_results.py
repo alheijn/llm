@@ -68,6 +68,6 @@ def save_summaries(cluster_summaries, output_dir):
     with open(summary_file, 'w') as f:
         for cluster_id, summary in cluster_summaries.items():
             f.write(f"\nCluster {cluster_id}:\n")
-            f.write(f"Topic: {summary['topic']}\n")
+            f.write(f"Summary: {summary['topic']}\n")
             f.write(f"Example texts: {summary['example_texts']}\n")
             f.write("-" * 80 + "\n")        
