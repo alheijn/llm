@@ -38,7 +38,7 @@ def save_clustering_results(num_clusters, clusters, cluster_labels, metrics, tex
         if cluster_id not in cluster_assignments:
             cluster_assignments[cluster_id] = []
         cluster_assignments[cluster_id].append(
-            texts[i][:200] + '...' if len(texts[i]) > 200 else texts[i]
+            texts[i][:200] + '...' if len(texts[i]) > 400 else texts[i]
         )
 
     results = {

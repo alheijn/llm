@@ -102,7 +102,7 @@ class DocumentClusterer:
         text = text.lower()
         
         phrases_to_remove = ['bbc', 'said', 'says', 'told', 'according to', 'reported', 'mr',
-                       'This video can not be played To play this video you need to enable JavaScript in your browser.',
+                       'this video can not be played to play this video you need to enable javascript in your browser.',
                        '\n', '\"', '\u201c', '\u201d', '\u2019s', r'\u00a', r'\u00d3' ]
         for phrase in phrases_to_remove:
             text = text.replace(phrase, '')
@@ -212,7 +212,7 @@ class DocumentClusterer:
         best_clusters = None
         best_kmeans = None
         
-        for n_clusters in range(int(self.num_clusters/3), self.num_clusters + int(2*self.num_clusters/3)):
+        for n_clusters in range(4, 2*self.num_clusters):
             if n_clusters < 2:
                 continue
             
@@ -482,7 +482,7 @@ def main():
     clusterer = DocumentClusterer(num_clusters=20, batch_size=5)
     
     # Process dataset
-    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=400)
+    clusters, cluster_labels, metrics, silhouette_avg = clusterer.process_dataset(num_samples=1000)
     
     # Print results
     print("\nClustering Results:")
