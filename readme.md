@@ -1,3 +1,6 @@
+# It's not pretty and it doesn't work well
+Still, enough time went into this project
+
 # Computational Linguistics - Project Objective
 Use the Mistral-7B model to identify topics in a small dataset and cluster the documents
 thematically. The focus is on implementing a simple practical solution optimized for the available
